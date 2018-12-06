@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/getlantern/golog"
 	"github.com/getlantern/ring"
@@ -24,12 +23,7 @@ const (
 var (
 	log = golog.LoggerFor("pcapper")
 
-	stop    = make(chan bool)
-	stopped = make(chan bool)
-
-	doDump      func(ip string) error
-	buffersByIP *lru.Cache
-	mx          sync.Mutex
+	dumpRequests = make(chan string, 10000)
 )
 
 // StartCapturing starts capturing packets from the named network interface. It
@@ -52,23 +46,17 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 	}
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
-	cache, err := lru.New(numIPs)
+	buffersByIP, err := lru.New(numIPs)
 	if err != nil {
 		return log.Errorf("Unable to initialize cache: %v", err)
 	}
 
-	mx.Lock()
-	buffersByIP = cache
-	mx.Unlock()
-
 	getBufferByIP := func(ip string) ring.List {
-		mx.Lock()
 		_buffer, found := buffersByIP.Get(ip)
 		if !found {
 			_buffer = ring.NewList(packetsPerIP)
 			buffersByIP.Add(ip, _buffer)
 		}
-		mx.Unlock()
 		return _buffer.(ring.List)
 	}
 
@@ -80,38 +68,11 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		}
 	}
 
-	doCapture := func() {
-		for packet := range packetSource.Packets() {
-			nl := packet.NetworkLayer()
-			switch t := nl.(type) {
-			case *layers.IPv4:
-				capturePacket(t.DstIP.String(), t.SrcIP.String(), packet)
-			case *layers.IPv6:
-				capturePacket(t.DstIP.String(), t.SrcIP.String(), packet)
-			}
-			select {
-			case <-stop:
-				stopped <- true
-				return
-			default:
-				// continue
-			}
-		}
-	}
-
-	go doCapture()
-
-	_doDump := func(ip string) error {
+	dumpPacketsForIP := func(ip string) error {
 		log.Debugf("Attempting to dump pcaps for %v", ip)
 
-		stop <- true
-		<-stopped
-
 		defer func() {
-			mx.Lock()
 			buffersByIP.Remove(ip)
-			mx.Unlock()
-			go doCapture()
 		}()
 
 		buffers := getBufferByIP(ip)
@@ -165,23 +126,32 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		return nil
 	}
 
-	mx.Lock()
-	doDump = _doDump
-	mx.Unlock()
+	go func() {
+		for {
+			select {
+			case packet := <-packetSource.Packets():
+				nl := packet.NetworkLayer()
+				switch t := nl.(type) {
+				case *layers.IPv4:
+					capturePacket(t.DstIP.String(), t.SrcIP.String(), packet)
+				case *layers.IPv6:
+					capturePacket(t.DstIP.String(), t.SrcIP.String(), packet)
+				}
+			case ip := <-dumpRequests:
+				dumpPacketsForIP(ip)
+			}
+		}
+	}()
 
 	return nil
 }
 
 // Dump dumps captured packets to/from the given ip to disk.
 func Dump(ip string) {
-	mx.Lock()
-	_doDump := doDump
-	mx.Unlock()
-
-	if _doDump == nil {
-		// We're not running, ignore
-		return
+	select {
+	case dumpRequests <- ip:
+		// ok
+	default:
+		log.Errorf("Too many pending dump requests, ignoring request for %v", ip)
 	}
-
-	go _doDump(ip)
 }
