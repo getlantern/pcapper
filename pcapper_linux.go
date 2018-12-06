@@ -173,15 +173,15 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 }
 
 // Dump dumps captured packets to/from the given ip to disk.
-func Dump(ip string) error {
+func Dump(ip string) {
 	mx.Lock()
 	_doDump := doDump
 	mx.Unlock()
 
 	if _doDump == nil {
 		// We're not running, ignore
-		return nil
+		return
 	}
 
-	return _doDump(ip)
+	go _doDump(ip)
 }
