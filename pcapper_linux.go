@@ -40,7 +40,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		localInterfaces[ifAddr.String()] = true
 	}
 
-	handle, err := pcap.OpenLive(interfaceName, snapLen, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(interfaceName, snapLen, false, pcap.BlockForever)
 	if err != nil {
 		return log.Errorf("Unable to open %v for packet capture: %v", interfaceName, err)
 	}
