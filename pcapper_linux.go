@@ -23,8 +23,13 @@ const (
 var (
 	log = golog.LoggerFor("pcapper")
 
-	dumpRequests = make(chan string, 10000)
+	dumpRequests = make(chan *dumpRequest, 10000)
 )
+
+type dumpRequest struct {
+	prefix string
+	ip     string
+}
 
 // StartCapturing starts capturing packets from the named network interface. It
 // will dump packets into files at <dir>/<ip>.pcap. It will store data for up to
@@ -68,8 +73,8 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		}
 	}
 
-	dumpPacketsForIP := func(ip string) error {
-		log.Debugf("Attempting to dump pcaps for %v", ip)
+	dumpPackets := func(prefix string, ip string) error {
+		log.Debugf("Attempting to dump pcaps for %v_%v", prefix, ip)
 
 		defer func() {
 			buffersByIP.Remove(ip)
@@ -81,7 +86,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 			return nil
 		}
 
-		pcapsFileName := filepath.Join(dir, ip+".pcap")
+		pcapsFileName := filepath.Join(dir, prefix+"_"+ip+".pcap")
 		newFile := false
 		pcapsFile, err := os.OpenFile(pcapsFileName, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
@@ -137,8 +142,8 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 				case *layers.IPv6:
 					capturePacket(t.DstIP.String(), t.SrcIP.String(), packet)
 				}
-			case ip := <-dumpRequests:
-				dumpPacketsForIP(ip)
+			case dr := <-dumpRequests:
+				dumpPackets(dr.prefix, dr.ip)
 			}
 		}
 	}()
@@ -147,9 +152,9 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 }
 
 // Dump dumps captured packets to/from the given ip to disk.
-func Dump(ip string) {
+func Dump(prefix string, ip string) {
 	select {
-	case dumpRequests <- ip:
+	case dumpRequests <- &dumpRequest{prefix, ip}:
 		// ok
 	default:
 		log.Errorf("Too many pending dump requests, ignoring request for %v", ip)
