@@ -23,7 +23,8 @@ const (
 var (
 	log = golog.LoggerFor("pcapper")
 
-	dumpRequests = make(chan *dumpRequest, 10000)
+	dumpRequests    = make(chan *dumpRequest, 10000)
+	dumpAllRequests = make(chan string, 10)
 )
 
 type dumpRequest struct {
@@ -144,6 +145,11 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 				}
 			case dr := <-dumpRequests:
 				dumpPackets(dr.prefix, dr.ip)
+			case prefix := <-dumpAllRequests:
+				log.Debug("Dumping packets for all IP addresses")
+				for _, ip := range buffersByIP.Keys() {
+					dumpPackets(prefix, ip.(string))
+				}
 			}
 		}
 	}()
@@ -159,4 +165,15 @@ func Dump(prefix string, ip string) {
 	default:
 		log.Errorf("Too many pending dump requests, ignoring request for %v", ip)
 	}
+}
+
+// DumpAll dumps all captured packets for all ips to disk.
+func DumpAll(prefix string) {
+	select {
+	case dumpAllRequests <- prefix:
+		// ok
+	default:
+		log.Error("Too many pending dump requests, ignoring request to dump all")
+	}
+
 }

@@ -7,6 +7,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 }
 
 // Dump doesn't do anything on this platform.
-func Dump(prefix string, ip string) error {
-	return nil
-}
+func Dump(prefix string, ip string) {}
+
+// DumpAll doesn't do anything on this platform.
+func DumpAll(prefix string) {}
