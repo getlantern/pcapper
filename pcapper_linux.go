@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/getlantern/golog"
 	"github.com/getlantern/ring"
@@ -14,10 +15,6 @@ import (
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/pcapgo"
 	"github.com/hashicorp/golang-lru"
-)
-
-const (
-	snapLen = 1600
 )
 
 var (
@@ -35,8 +32,9 @@ type dumpRequest struct {
 // StartCapturing starts capturing packets from the named network interface. It
 // will dump packets into files at <dir>/<ip>.pcap. It will store data for up to
 // <numIPs> of the most recently active IPs in memory, and it will store up to
-// <packetsPerIP> packets per IP.
-func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP int) error {
+// <packetsPerIP> packets per IP. snapLen specifies the maximum packet length to
+// capture and timeout specifies the capture timeout.
+func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP int, snapLen int, timeout time.Duration) error {
 	ifAddrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return log.Errorf("Unable to determine interface addresses: %v", err)
@@ -46,7 +44,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		localInterfaces[ifAddr.String()] = true
 	}
 
-	handle, err := pcap.OpenLive(interfaceName, snapLen, false, pcap.BlockForever)
+	handle, err := pcap.OpenLive(interfaceName, int32(snapLen), false, timeout)
 	if err != nil {
 		return log.Errorf("Unable to open %v for packet capture: %v", interfaceName, err)
 	}
@@ -102,7 +100,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		}
 		pcaps := pcapgo.NewWriter(pcapsFile)
 		if newFile {
-			pcaps.WriteFileHeader(snapLen, layers.LinkTypeEthernet)
+			pcaps.WriteFileHeader(uint32(snapLen), layers.LinkTypeEthernet)
 		}
 
 		dumpPacket := func(dstIP string, srcIP string, packet gopacket.Packet) {
