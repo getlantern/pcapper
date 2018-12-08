@@ -130,6 +130,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		return nil
 	}
 
+	doDumpRequests := make(chan *dumpRequest, numIPs)
 	go func() {
 		for {
 			select {
@@ -142,8 +143,14 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 					capturePacket(t.DstIP.String(), t.SrcIP.String(), packet)
 				}
 			case dr := <-dumpRequests:
+				// Wait a little bit to make sure we capture the relevant packets
+				time.Sleep(timeout * 2)
+				doDumpRequests <- dr
+			case dr := <-doDumpRequests:
 				dumpPackets(dr.prefix, dr.ip)
 			case prefix := <-dumpAllRequests:
+				// Wait a little bit to make sure we capture the relevant packets
+				time.Sleep(timeout * 2)
 				log.Debug("Dumping packets for all IP addresses")
 				for _, ip := range buffersByIP.Keys() {
 					dumpPackets(prefix, ip.(string))
