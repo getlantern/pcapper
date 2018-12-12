@@ -7,11 +7,12 @@ import (
 )
 
 // StartCapturing doesn't do anything on this platform.
-func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP int, snapLen int, timeout time.Duration) error {
+func StartCapturing(application string, interfaceName string, dir string, numIPs int, packetsPerIP int, snapLen int, timeout time.Duration) error {
+	return nil
 }
 
 // Dump doesn't do anything on this platform.
-func Dump(prefix string, ip string) {}
+func Dump(ip string, comment string) {}
 
 // DumpAll doesn't do anything on this platform.
-func DumpAll(prefix string) {}
+func DumpAll(comment string) {}

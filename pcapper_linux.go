@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/getlantern/golog"
@@ -25,8 +26,8 @@ var (
 )
 
 type dumpRequest struct {
-	prefix string
-	ip     string
+	ip      string
+	comment string
 }
 
 // StartCapturing starts capturing packets from the named network interface. It
@@ -34,7 +35,7 @@ type dumpRequest struct {
 // <numIPs> of the most recently active IPs in memory, and it will store up to
 // <packetsPerIP> packets per IP. snapLen specifies the maximum packet length to
 // capture and timeout specifies the capture timeout.
-func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP int, snapLen int, timeout time.Duration) error {
+func StartCapturing(application string, interfaceName string, dir string, numIPs int, packetsPerIP int, snapLen int, timeout time.Duration) error {
 	ifAddrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return log.Errorf("Unable to determine interface addresses: %v", err)
@@ -43,6 +44,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 	for _, ifAddr := range ifAddrs {
 		localInterfaces[ifAddr.String()] = true
 	}
+	log.Debugf("Will not save packets for local interfaces: %v", localInterfaces)
 
 	handle, err := pcap.OpenLive(interfaceName, int32(snapLen), false, timeout)
 	if err != nil {
@@ -72,8 +74,8 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 		}
 	}
 
-	dumpPackets := func(prefix string, ip string) error {
-		log.Debugf("Attempting to dump pcaps for %v_%v", prefix, ip)
+	dumpPackets := func(ip string, comment string) error {
+		log.Debugf("Attempting to dump pcaps for %v with comment %v", ip)
 
 		defer func() {
 			buffersByIP.Remove(ip)
@@ -85,8 +87,7 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 			return nil
 		}
 
-		pcapsFileName := filepath.Join(dir, prefix+"_"+ip+".pcap")
-		newFile := false
+		pcapsFileName := filepath.Join(dir, ip+".pcapng")
 		pcapsFile, err := os.OpenFile(pcapsFileName, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			if !os.IsNotExist(err) {
@@ -96,16 +97,36 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 			if err != nil {
 				return log.Errorf("Unable to create pcap file %v: %v", pcapsFileName, err)
 			}
-			newFile = true
 		}
-		pcaps := pcapgo.NewWriter(pcapsFile)
-		if newFile {
-			pcaps.WriteFileHeader(uint32(snapLen), layers.LinkTypeEthernet)
+		intf := pcapgo.NgInterface{
+			Name:                interfaceName,
+			OS:                  runtime.GOOS,
+			SnapLength:          uint32(snapLen),
+			TimestampResolution: 9,
+		}
+		intf.LinkType = layers.LinkTypeEthernet
+		opts := pcapgo.NgWriterOptions{
+			SectionInfo: pcapgo.NgSectionInfo{
+				Hardware:    runtime.GOARCH,
+				OS:          runtime.GOOS,
+				Application: application,
+				Comment:     comment,
+			},
+		}
+		pcaps, err := pcapgo.NewNgWriterInterface(pcapsFile, intf, opts)
+		if err != nil {
+			pcapsFile.Close()
+			return log.Errorf("Error opening file %v for writing pcaps: %v", pcapsFileName, err)
 		}
 
 		dumpPacket := func(dstIP string, srcIP string, packet gopacket.Packet) {
 			if dstIP == ip || srcIP == ip {
-				pcaps.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
+				ci := packet.Metadata().CaptureInfo
+				ci.InterfaceIndex = 0
+				err := pcaps.WritePacket(ci, packet.Data())
+				if err != nil {
+					log.Errorf("Error writing packet to %v: %v", pcapsFileName, err)
+				}
 			}
 		}
 
@@ -125,8 +146,12 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 			return true
 		})
 
+		flushErr := pcaps.Flush()
 		pcapsFile.Close()
-		log.Debugf("Logged pcaps for %v to %v", ip, pcapsFile.Name())
+		if flushErr != nil {
+			return log.Errorf("Error flushing pcaps to %v", pcapsFileName)
+		}
+		log.Debugf("Logged pcaps for %v to %v", ip, pcapsFileName)
 		return nil
 	}
 
@@ -147,13 +172,13 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 				time.Sleep(timeout * 2)
 				doDumpRequests <- dr
 			case dr := <-doDumpRequests:
-				dumpPackets(dr.prefix, dr.ip)
-			case prefix := <-dumpAllRequests:
+				dumpPackets(dr.ip, dr.comment)
+			case comment := <-dumpAllRequests:
 				// Wait a little bit to make sure we capture the relevant packets
 				time.Sleep(timeout * 2)
 				log.Debug("Dumping packets for all IP addresses")
 				for _, ip := range buffersByIP.Keys() {
-					dumpPackets(prefix, ip.(string))
+					dumpPackets(ip.(string), comment)
 				}
 			}
 		}
@@ -163,22 +188,22 @@ func StartCapturing(interfaceName string, dir string, numIPs int, packetsPerIP i
 }
 
 // Dump dumps captured packets to/from the given ip to disk.
-func Dump(prefix string, ip string) {
+func Dump(ip string, comment string) {
 	select {
-	case dumpRequests <- &dumpRequest{prefix, ip}:
+	case dumpRequests <- &dumpRequest{ip, comment}:
 		// ok
 	default:
-		log.Errorf("Too many pending dump requests, ignoring request for %v", ip)
+		log.Errorf("Too many pending dump requests, ignoring request for %v with comment %v", ip, comment)
 	}
 }
 
 // DumpAll dumps all captured packets for all ips to disk.
-func DumpAll(prefix string) {
+func DumpAll(comment string) {
 	select {
-	case dumpAllRequests <- prefix:
+	case dumpAllRequests <- comment:
 		// ok
 	default:
-		log.Error("Too many pending dump requests, ignoring request to dump all")
+		log.Errorf("Too many pending dump requests, ignoring request to dump all with comment %v", comment)
 	}
 
 }
