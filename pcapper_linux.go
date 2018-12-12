@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/getlantern/golog"
@@ -42,9 +43,10 @@ func StartCapturing(application string, interfaceName string, dir string, numIPs
 	}
 	localInterfaces := make(map[string]bool, len(ifAddrs))
 	for _, ifAddr := range ifAddrs {
-		localInterfaces[ifAddr.String()] = true
+		addr := strings.Split(ifAddr.String(), "/")[0] // get rid of CIDR routing prefix
+		log.Debugf("Will not save packets for local interface %v", addr)
+		localInterfaces[addr] = true
 	}
-	log.Debugf("Will not save packets for local interfaces: %v", localInterfaces)
 
 	handle, err := pcap.OpenLive(interfaceName, int32(snapLen), false, timeout)
 	if err != nil {
@@ -75,7 +77,7 @@ func StartCapturing(application string, interfaceName string, dir string, numIPs
 	}
 
 	dumpPackets := func(ip string, comment string) error {
-		log.Debugf("Attempting to dump pcaps for %v with comment %v", ip)
+		log.Debugf("Attempting to dump pcaps for %v with comment %v", ip, comment)
 
 		defer func() {
 			buffersByIP.Remove(ip)
